@@ -24,3 +24,22 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Force iconography preview icons to be black */
+.iconography-preview-icon svg {
+  color: #000000 !important;
+}
+
+.iconography-preview-icon svg path {
+  stroke: #000000 !important;
+  fill: #000000 !important;
+}
+
+.iconography-preview-icon svg circle {
+  stroke: #000000 !important;
+  fill: #000000 !important;
+}
+
+.iconography-preview-icon svg * {
+  color: #000000 !important;
+}
