@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import OpenAI from "openai";
+import sharp from "sharp";
 
 import {
     TasteFingerprint,
@@ -69,12 +70,78 @@ export async function POST(request: NextRequest) {
       images.map(async (file) => {
 
         const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        
+        // Check if file is HEIC/HEIF by extension, MIME type, or magic bytes
+        const fileName = file.name.toLowerCase();
+        const fileType = file.type?.toLowerCase() || "";
+        
+        // Check magic bytes for HEIC/HEIF (first 12 bytes)
+        const magicBytes = buffer.slice(0, 12);
+        const isHeicByMagic = magicBytes.includes(Buffer.from('ftyp')) && 
+                              (magicBytes.includes(Buffer.from('heic')) || 
+                               magicBytes.includes(Buffer.from('heif')) ||
+                               magicBytes.includes(Buffer.from('mif1')));
+        
+        const isHeic = fileName.endsWith('.heic') || 
+                      fileName.endsWith('.heif') || 
+                      fileType === 'image/heic' || 
+                      fileType === 'image/heif' ||
+                      fileType.includes('heic') ||
+                      fileType.includes('heif') ||
+                      isHeicByMagic;
 
-        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        let processedBuffer: Buffer;
+        let mimeType: string;
 
-        // Detect MIME type from file, default to jpeg if unknown
+        if (isHeic) {
+          // HEIC files should be converted on the client side before upload
+          // If we receive one here, it means conversion failed or was bypassed
+          console.warn(`Received HEIC file ${file.name} - this should have been converted on the client side`);
+          throw new Error(`HEIC file ${file.name} was not converted. Please ensure your browser supports HEIC conversion or convert the file manually to JPEG, PNG, GIF, or WebP format.`);
+        } else {
+          // For non-HEIC files, ensure they're in a supported format
+          const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const detectedType = file.type || "image/jpeg";
+          
+          if (supportedTypes.includes(detectedType)) {
+            processedBuffer = buffer;
+            mimeType = detectedType;
+          } else {
+            // Try to detect and convert unsupported formats (including HEIC that wasn't detected)
+            try {
+              console.log(`Attempting to convert file: ${file.name} (detected type: ${detectedType})`);
+              
+              // Try to get metadata to see what format sharp detects
+              const metadata = await sharp(buffer).metadata();
+              console.log(`Sharp detected format: ${metadata.format}`);
+              
+              // If sharp detects it as heif/heic, convert it
+              if (metadata.format === 'heif' || metadata.format === 'heic') {
+                console.log(`Sharp detected HEIC/HEIF format, converting to JPEG`);
+                processedBuffer = await sharp(buffer, {
+                  failOnError: false,
+                })
+                  .jpeg({ quality: 95, mozjpeg: true })
+                  .toBuffer();
+                mimeType = "image/jpeg";
+              } else {
+                // Convert other unsupported formats to JPEG
+                processedBuffer = await sharp(buffer, {
+                  failOnError: false,
+                })
+                  .jpeg({ quality: 95 })
+                  .toBuffer();
+                mimeType = "image/jpeg";
+              }
+            } catch (error) {
+              console.error(`Error converting file ${file.name}:`, error);
+              throw new Error(`Unsupported image format for ${file.name}. Please use JPEG, PNG, GIF, or WebP format. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }
+        }
 
-        const mimeType = file.type || "image/jpeg";
+        const base64 = processedBuffer.toString("base64");
 
         return { base64, mimeType };
 

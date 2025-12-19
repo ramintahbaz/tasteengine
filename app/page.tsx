@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ChangeEvent } from "react";
 import type {
   TasteFingerprint,
@@ -10,16 +10,30 @@ import type {
 import { TasteSummary } from "@/app/components/TasteSummary";
 import { MaterialControlTile } from "@/app/components/MaterialControlTile";
 // React Icons imports
-import { FiCheck as FeatherCheck } from "react-icons/fi"; // Feather icons
-import { MdCheckCircle as MaterialCheck, MdCheckCircleOutline as MaterialOutlinedCheck } from "react-icons/md"; // Material Design
-import { FaCheckCircle as FaCheck } from "react-icons/fa"; // Font Awesome
-import { MdCheckCircle as MaterialSharpCheck } from "react-icons/md"; // Material Sharp (using regular for now)
-import { HiCheck as HeroCheck } from "react-icons/hi"; // Heroicons
+import { FiCheck as FeatherCheck, FiCamera, FiImage } from "react-icons/fi";
+import { MdCheckCircle as MaterialCheck, MdCheckCircleOutline as MaterialOutlinedCheck } from "react-icons/md";
+import { FaCheckCircle as FaCheck } from "react-icons/fa";
+import { MdCheckCircle as MaterialSharpCheck } from "react-icons/md";
+import { HiCheck as HeroCheck } from "react-icons/hi";
+
+// Dynamic import for heic2any (browser-only)
+const loadHeic2Any = async () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const module = await import('heic2any');
+    return module.default || module;
+  } catch (error) {
+    console.error('Failed to load heic2any:', error);
+    return null;
+  }
+};
+
+type ViewMode = "landing" | "upload" | "results";
 
 export default function Home() {
+  const [viewMode, setViewMode] = useState<ViewMode>("landing");
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [fingerprint, setFingerprint] = useState<TasteFingerprint | null>(null);
   const [confidence, setConfidence] = useState<TasteConfidence | null>(null);
@@ -30,21 +44,22 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [styleText, setStyleText] = useState<string>("");
   const [styleTextUsedInExtraction, setStyleTextUsedInExtraction] = useState<string>("");
+  
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   // Load Google Fonts dynamically when fingerprint changes
   useEffect(() => {
-    // Remove all previously added font links
     const existingFontLinks = document.querySelectorAll('link[data-taste-font]');
     existingFontLinks.forEach(link => link.remove());
 
     if (fingerprint?.typography.fontUrl) {
-      // Check if link already exists (by href, not just any link)
       const existingLink = document.querySelector(`link[href="${fingerprint.typography.fontUrl}"]`);
       if (!existingLink) {
         const link = document.createElement("link");
         link.rel = "stylesheet";
         link.href = fingerprint.typography.fontUrl;
-        link.setAttribute("data-taste-font", "true"); // Mark it so we can remove it later
+        link.setAttribute("data-taste-font", "true");
         document.head.appendChild(link);
       }
     }
@@ -61,51 +76,116 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [selectedImageIndex]);
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  // Check if file is HEIC
+  const isHeicFile = (file: File): boolean => {
+    const fileName = file.name.toLowerCase();
+    const fileType = file.type?.toLowerCase() || "";
+    return (
+      fileName.endsWith('.heic') ||
+      fileName.endsWith('.heif') ||
+      fileType === 'image/heic' ||
+      fileType === 'image/heif'
+    );
+  };
+
+  // Convert HEIC file to JPEG using heic2any
+  const convertHeicToJpeg = async (file: File): Promise<File> => {
+    const heic2any = await loadHeic2Any();
+    
+    if (!heic2any) {
+      throw new Error('HEIC conversion library not available. Please refresh the page or use a different browser.');
+    }
+
+    try {
+      const convertedBlob = await heic2any({
+        blob: file,
+        toType: 'image/jpeg',
+        quality: 0.95,
+      });
+
+      // heic2any returns an array, get the first item
+      const blob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+      
+      // Create a new File object from the blob
+      const jpegFile = new File(
+        [blob],
+        file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+        { type: 'image/jpeg' }
+      );
+      
+      return jpegFile;
+    } catch (error) {
+      throw new Error(`Failed to convert HEIC file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files) return;
     const selected = Array.from(event.target.files);
-    setFiles(selected);
-    generatePreviews(selected);
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Convert HEIC files to JPEG
+      const convertedFiles: File[] = [];
+      for (const file of selected) {
+        if (isHeicFile(file)) {
+          try {
+            const jpegFile = await convertHeicToJpeg(file);
+            convertedFiles.push(jpegFile);
+          } catch (error) {
+            setError(`Failed to convert ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            setLoading(false);
+            return;
+          }
+        } else {
+          convertedFiles.push(file);
+        }
+      }
+      
+      setFiles(convertedFiles);
+      generatePreviews(convertedFiles);
+      setViewMode("upload");
+    } catch (error) {
+      setError(`Error processing files: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const generatePreviews = (fileList: File[]) => {
-    const previewUrls: string[] = [];
-    fileList.forEach((file) => {
+    const previewUrls: string[] = new Array(fileList.length);
+    let loadedCount = 0;
+    
+    fileList.forEach((file, index) => {
       const reader = new FileReader();
       reader.onload = (e) => {
         if (e.target?.result) {
-          previewUrls.push(e.target.result as string);
-          if (previewUrls.length === fileList.length) {
+          previewUrls[index] = e.target.result as string;
+          loadedCount++;
+          if (loadedCount === fileList.length) {
             setPreviews(previewUrls);
           }
+        }
+      };
+      reader.onerror = () => {
+        console.error(`Failed to load preview for file ${index}`);
+        loadedCount++;
+        if (loadedCount === fileList.length) {
+          setPreviews(previewUrls.filter(Boolean));
         }
       };
       reader.readAsDataURL(file);
     });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const handleCameraClick = () => {
+    cameraInputRef.current?.click();
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    
-    const droppedFiles = Array.from(e.dataTransfer.files).filter(
-      (file) => file.type.startsWith("image/")
-    );
-    
-    if (droppedFiles.length > 0) {
-      setFiles(droppedFiles);
-      generatePreviews(droppedFiles);
-    }
+  const handleGalleryClick = () => {
+    galleryInputRef.current?.click();
   };
 
   const refineFingerprintFromAnswers = (
@@ -179,24 +259,22 @@ export default function Home() {
       return;
     }
     setLoading(true);
-    // Clear ALL previous results completely
     setFingerprint(null);
     setConfidence(null);
     setClarifyingQuestions([]);
     setQuestionAnswers({});
     setAnswersSubmitted(false);
-    setSelectedImageIndex(null); // Close any open image modal
-    setStyleTextUsedInExtraction(""); // Clear previous style text used
+    setSelectedImageIndex(null);
+    setStyleTextUsedInExtraction("");
     
-    // Remove all previously loaded fonts immediately
     const existingFontLinks = document.querySelectorAll('link[data-taste-font]');
     existingFontLinks.forEach(link => link.remove());
+    
     try {
       const formData = new FormData();
       files.forEach((file) => formData.append("images", file));
       if (styleText.trim()) {
         formData.append("styleText", styleText.trim());
-        console.log("📝 Sending styleText to API:", styleText.trim());
       }
 
       const res = await fetch("/api/taste", {
@@ -213,11 +291,8 @@ export default function Home() {
       setFingerprint(data.fingerprint);
       setConfidence(data.confidence || null);
       setClarifyingQuestions(data.clarifyingQuestions || []);
-      
-      // Track the styleText that was used for this extraction
       setStyleTextUsedInExtraction(styleText.trim());
-      
-      // Note: Material spec is now part of the fingerprint, no separate Claude call needed
+      setViewMode("results");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -225,81 +300,115 @@ export default function Home() {
     }
   };
 
-  return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col items-center py-10 px-4">
-      <div className="w-full max-w-5xl space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-semibold">
-            Taste Engine Mini
-          </h1>
-          <p className="text-sm text-zinc-400 max-w-xl">
-            Drop a few screenshots or moodboard images. I’ll extract a taste fingerprint and show it as JSON + a visual breakdown,
-            then apply it to a sample UI.
-          </p>
-        </header>
+  const handleReset = () => {
+    setViewMode("landing");
+    setFiles([]);
+    setPreviews([]);
+    setFingerprint(null);
+    setConfidence(null);
+    setClarifyingQuestions([]);
+    setQuestionAnswers({});
+    setAnswersSubmitted(false);
+    setSelectedImageIndex(null);
+    setStyleText("");
+    setStyleTextUsedInExtraction("");
+    setError(null);
+  };
 
-        <section className="space-y-4">
-          {/* Upload area with drag and drop */}
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={`
-              border-2 border-dashed rounded-xl p-8 transition-colors
-              ${isDragging 
-                ? "border-zinc-400 bg-zinc-900/80" 
-                : "border-zinc-800 bg-zinc-900/50 hover:border-zinc-700"
-              }
-            `}
-          >
+  // Landing page view
+  if (viewMode === "landing") {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col items-center justify-center px-4 py-8">
+        <div className="w-full max-w-md space-y-8">
+          <header className="text-center space-y-3">
+            <h1 className="text-3xl font-semibold">
+              Taste Engine
+            </h1>
+            <p className="text-sm text-zinc-400">
+              Upload images to extract your design taste fingerprint
+            </p>
+          </header>
+
+          {/* Upload pad */}
+          <div className="border-2 border-dashed border-zinc-800 rounded-2xl p-12 bg-zinc-900/50 flex flex-col items-center justify-center min-h-[300px]">
+            <div className="w-20 h-20 rounded-full bg-zinc-800 flex items-center justify-center mb-6">
+              <FiImage className="w-10 h-10 text-zinc-400" />
+            </div>
+            <p className="text-sm text-zinc-400 mb-8 text-center">
+              Choose how you'd like to add images
+            </p>
+
+            {/* Camera and Gallery buttons */}
+            <div className="w-full space-y-3">
+              <button
+                onClick={handleCameraClick}
+                className="w-full px-6 py-4 rounded-xl bg-zinc-100 text-zinc-900 font-medium flex items-center justify-center gap-3 hover:bg-zinc-200 transition-colors active:scale-95"
+              >
+                <FiCamera className="w-5 h-5" />
+                <span>Use Camera</span>
+              </button>
+              
+              <button
+                onClick={handleGalleryClick}
+                className="w-full px-6 py-4 rounded-xl bg-zinc-800 text-zinc-100 font-medium flex items-center justify-center gap-3 hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700"
+              >
+                <FiImage className="w-5 h-5" />
+                <span>Choose from Gallery</span>
+              </button>
+            </div>
+
+            {/* Hidden file inputs */}
             <input
+              ref={cameraInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.heic,.heif,image/heic,image/heif"
+              capture="environment"
               multiple
               onChange={handleFileChange}
               className="hidden"
-              id="file-upload"
             />
-            <label
-              htmlFor="file-upload"
-              className="flex flex-col items-center justify-center cursor-pointer"
-            >
-              <svg
-                className="w-12 h-12 text-zinc-500 mb-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                />
-              </svg>
-              <p className="text-sm text-zinc-400 mb-2">
-                Drag and drop images here, or{" "}
-                <span className="text-zinc-300 underline">click to browse</span>
-              </p>
-              <p className="text-xs text-zinc-500">
-                Supports multiple images
-              </p>
-            </label>
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*,.heic,.heif,image/heic,image/heif"
+              multiple
+              onChange={handleFileChange}
+              className="hidden"
+            />
           </div>
+        </div>
+      </main>
+    );
+  }
 
-          {/* Thumbnail previews */}
+  // Upload/Preview view
+  if (viewMode === "upload") {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col py-6 px-4">
+        <div className="w-full max-w-md mx-auto space-y-6">
+          <header className="flex items-center justify-between">
+            <h1 className="text-2xl font-semibold">Taste Engine</h1>
+            <button
+              onClick={handleReset}
+              className="text-sm text-zinc-400 hover:text-zinc-200"
+            >
+              Reset
+            </button>
+          </header>
+
+          {/* Image previews */}
           {previews.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               {previews.map((preview, index) => (
                 <div
                   key={index}
-                  className="relative group rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 cursor-pointer"
+                  className="relative group rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 cursor-pointer aspect-square"
                   onClick={() => setSelectedImageIndex(index)}
                 >
                   <img
                     src={preview}
                     alt={`Preview ${index + 1}`}
-                    className="w-full h-32 object-cover"
+                    className="w-full h-full object-cover"
                   />
                   <button
                     onClick={(e) => {
@@ -308,26 +417,73 @@ export default function Home() {
                       const newPreviews = previews.filter((_, i) => i !== index);
                       setFiles(newFiles);
                       setPreviews(newPreviews);
+                      if (newFiles.length === 0) {
+                        setViewMode("landing");
+                      }
                     }}
-                    className="absolute top-1 right-1 w-6 h-6 bg-red-500/80 hover:bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs z-10"
+                    className="absolute top-2 right-2 w-7 h-7 bg-red-500/90 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-sm z-10"
                   >
                     ×
                   </button>
-                  <p className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] px-2 py-1 truncate">
-                    {files[index]?.name}
-                  </p>
                 </div>
               ))}
             </div>
           )}
 
+          {/* Add more images */}
+          <div className="space-y-3">
+            <button
+              onClick={handleGalleryClick}
+              className="w-full px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm font-medium hover:bg-zinc-800 transition-colors"
+            >
+              Add More Images
+            </button>
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*,.heic,.heif,image/heic,image/heif"
+              multiple
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </div>
+
+          {/* Style Text Input */}
+          <div className="space-y-2">
+            <label className="text-xs text-zinc-400">
+              Style description (optional)
+            </label>
+            <input
+              type="text"
+              value={styleText}
+              onChange={(e) => setStyleText(e.target.value)}
+              placeholder="e.g., glass-like, matte finish, soft shadows..."
+              className="w-full px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-700"
+            />
+          </div>
+
+          {/* Extract button */}
+          <button
+            onClick={handleSubmit}
+            disabled={loading || files.length === 0}
+            className="w-full px-4 py-4 rounded-xl bg-zinc-100 text-zinc-900 text-base font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-200 transition-colors active:scale-95"
+          >
+            {loading ? "Extracting..." : "Extract Taste"}
+          </button>
+
+          {error && (
+            <p className="text-sm text-red-400 text-center">
+              {error}
+            </p>
+          )}
+
           {/* Image modal */}
           {selectedImageIndex !== null && (
             <div
-              className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
+              className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4"
               onClick={() => setSelectedImageIndex(null)}
             >
-              <div className="relative max-w-7xl max-h-full">
+              <div className="relative max-w-full max-h-full">
                 <img
                   src={previews[selectedImageIndex]}
                   alt={`Preview ${selectedImageIndex + 1}`}
@@ -340,45 +496,65 @@ export default function Home() {
                 >
                   ×
                 </button>
-                <div className="absolute bottom-4 left-4 right-4 bg-black/60 text-white text-sm px-4 py-2 rounded-lg">
-                  {files[selectedImageIndex]?.name}
-                </div>
               </div>
             </div>
           )}
+        </div>
+      </main>
+    );
+  }
 
-          {/* Style Text Input */}
-          <div className="space-y-2">
-            <label className="text-xs text-zinc-400">
-              Style description (optional)
-            </label>
-            <input
-              type="text"
-              value={styleText}
-              onChange={(e) => setStyleText(e.target.value)}
-              placeholder="e.g., glass-like, matte finish, soft shadows, 3D depth..."
-              className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-700"
-            />
-            <p className="text-[10px] text-zinc-500">
-              Describe the material style you want (affects translucency, blur, gloss, texture, shadows, etc.)
-            </p>
-          </div>
-
-          {/* Extract button */}
+  // Results view
+  return (
+    <main className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col py-6 px-4">
+      <div className="w-full max-w-md mx-auto space-y-6">
+        <header className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">Results</h1>
           <button
-            onClick={handleSubmit}
-            disabled={loading || files.length === 0}
-            className="w-full px-4 py-2 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-200 transition-colors"
+            onClick={handleReset}
+            className="text-sm text-zinc-400 hover:text-zinc-200"
           >
-            {loading ? "Extracting..." : "Extract taste"}
+            New Analysis
           </button>
+        </header>
 
-          {error && (
-            <p className="text-xs text-red-400">
-              {error}
-            </p>
-          )}
-        </section>
+        {/* Source Images */}
+        {(previews.length > 0 || files.length > 0) && (
+          <section className="border border-zinc-800 rounded-xl p-4 bg-zinc-950">
+            <h2 className="text-sm font-medium mb-3">Source Images</h2>
+            {previews.length > 0 ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  {previews.map((preview, index) => (
+                    <div
+                      key={index}
+                      className="relative group rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 cursor-pointer aspect-square"
+                      onClick={() => setSelectedImageIndex(index)}
+                    >
+                      <img
+                        src={preview}
+                        alt={`Source ${index + 1}`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          console.error(`Failed to load preview image ${index}`);
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-zinc-400 mt-3">
+                  Tap an image to view full size
+                </p>
+              </>
+            ) : (
+              <div className="text-sm text-zinc-400">
+                {files.length} image{files.length !== 1 ? 's' : ''} uploaded
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Sample UI preview */}
         {fingerprint && (
@@ -388,15 +564,15 @@ export default function Home() {
         )}
 
         {/* JSON + Visual breakdown */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <section className="space-y-4">
           <div className="border border-zinc-800 rounded-xl p-4 bg-zinc-950">
             <h2 className="text-sm font-medium mb-2">
               Taste fingerprint (JSON)
             </h2>
-            <pre className="text-xs text-zinc-300 whitespace-pre-wrap break-all max-h-80 overflow-auto">
+            <pre className="text-xs text-zinc-300 whitespace-pre-wrap break-all max-h-60 overflow-auto">
               {fingerprint
                 ? JSON.stringify(fingerprint, null, 2)
-                : "Run an extraction to see your taste fingerprint."}
+                : "No fingerprint available."}
             </pre>
           </div>
 
@@ -407,7 +583,7 @@ export default function Home() {
           <section className="border border-zinc-800 rounded-xl p-4 bg-zinc-950 space-y-3">
             <h2 className="text-sm font-medium">Clarifying questions</h2>
             <p className="text-xs text-zinc-400">
-              The engine sees some mixed signals in your images and wants your input. Answering these could refine the taste mapping in a next version.
+              Answer these to refine the taste mapping.
             </p>
             <ul className="space-y-4">
               {clarifyingQuestions.map((q, idx) => (
@@ -440,7 +616,6 @@ export default function Home() {
                   return;
                 }
                 
-                // Refine the fingerprint based on answers
                 const refinedFingerprint = refineFingerprintFromAnswers(
                   fingerprint,
                   questionAnswers,
@@ -448,19 +623,16 @@ export default function Home() {
                 );
                 setFingerprint(refinedFingerprint);
                 
-                console.log("Submitted answers:", questionAnswers);
-                console.log("Refined fingerprint:", refinedFingerprint);
                 setAnswersSubmitted(true);
                 setError(null);
                 
-                // Clear answers after a delay
                 setTimeout(() => {
                   setQuestionAnswers({});
                   setAnswersSubmitted(false);
                 }, 3000);
               }}
               disabled={answersSubmitted || !fingerprint}
-              className="px-4 py-2 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-lg hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-3 text-sm font-medium bg-zinc-100 text-zinc-900 rounded-lg hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {answersSubmitted ? "Answers applied!" : "Apply answers to fingerprint"}
             </button>
@@ -470,6 +642,32 @@ export default function Home() {
               </p>
             )}
           </section>
+        )}
+
+        {/* Image modal */}
+        {selectedImageIndex !== null && (
+          <div
+            className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4"
+            onClick={() => setSelectedImageIndex(null)}
+          >
+            <div className="relative max-w-full max-h-full">
+              <img
+                src={previews[selectedImageIndex]}
+                alt={`Source ${selectedImageIndex + 1}`}
+                className="max-w-full max-h-[90vh] object-contain rounded-lg"
+                onClick={(e) => e.stopPropagation()}
+              />
+              <button
+                onClick={() => setSelectedImageIndex(null)}
+                className="absolute top-4 right-4 w-10 h-10 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full flex items-center justify-center transition-colors text-xl"
+              >
+                ×
+              </button>
+              <div className="absolute bottom-4 left-4 right-4 bg-black/60 text-white text-sm px-4 py-2 rounded-lg">
+                {files[selectedImageIndex]?.name || `Image ${selectedImageIndex + 1}`}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </main>
@@ -482,12 +680,10 @@ type SampleProps = {
   styleTextUsed?: string;
 };
 
-// Helper function to check if material style matches style text keywords
 function doesMaterialStyleMatchStyleText(materialStyle: string, styleText: string): boolean {
   const style = materialStyle.toLowerCase();
   const text = styleText.toLowerCase();
   
-  // Check for common material style keywords
   const keywords: Record<string, string[]> = {
     "skeuo": ["skeuo", "skeuomorphic", "skeuomorphism", "3d", "depth", "bevel", "realistic"],
     "neuo": ["neuo", "neumorphic", "neumorphism", "soft", "extruded", "embossed"],
@@ -496,40 +692,28 @@ function doesMaterialStyleMatchStyleText(materialStyle: string, styleText: strin
     "flat": ["flat", "minimal", "simple", "clean"]
   };
   
-  // Check if any keyword matches
   for (const [key, terms] of Object.entries(keywords)) {
     if (style.includes(key)) {
-      // Material style matches this category, check if styleText contains related keywords
       return terms.some(term => text.includes(term));
     }
   }
   
-  // If material style doesn't match known categories, still show if styleText was provided
   return true;
 }
 
-// Helper to calculate luminance of a color
 function getLuminance(hex: string): number {
-  // Remove # if present
   const color = hex.replace('#', '');
-  
-  // Convert to RGB
   const r = parseInt(color.substring(0, 2), 16);
   const g = parseInt(color.substring(2, 4), 16);
   const b = parseInt(color.substring(4, 6), 16);
-  
-  // Calculate relative luminance
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-// Helper to determine if a color is light or dark
 function getContrastColor(hex: string): string {
   const luminance = getLuminance(hex);
-  // Return black for light colors, white for dark colors
   return luminance > 0.5 ? '#000000' : '#FFFFFF';
 }
 
-// Helper to get icon component based on library
 function getIconComponent(library: string) {
   switch (library) {
     case "feather":
@@ -552,47 +736,28 @@ function SampleUI({ title, fingerprint, styleTextUsed = "" }: SampleProps) {
   const bg = fingerprint?.palette.neutral[0] || "#111827";
   let primary = fingerprint?.palette.primary?.[0];
   
-  // Debug: log what we got from fingerprint
-  console.log("🔍 Button color debug:", {
-    rawPrimary: fingerprint?.palette.primary?.[0],
-    accent: fingerprint?.palette.accent,
-    neutral: fingerprint?.palette.neutral
-  });
-  
-  // Always avoid the fallback blue - replace it immediately
   if (primary === "#2563EB") {
-    console.log("🚫 Rejecting blue fallback color");
-    primary = undefined; // Force it to use alternative logic
+    primary = undefined;
   }
   
-  // If primary is missing or was the fallback blue, try to use a better color
   if (!primary) {
-    // Check if we have accent colors first
     if (fingerprint?.palette.accent && fingerprint.palette.accent.length > 0) {
       primary = fingerprint.palette.accent[0];
-      console.log("✅ Using accent color:", primary);
     } else {
-      // Use a contrasting color based on background brightness
       const bgLuminance = getLuminance(bg);
       primary = bgLuminance > 0.5 ? "#000000" : "#FFFFFF";
-      console.log("✅ Using contrasting color:", primary, "(bg luminance:", bgLuminance + ")");
     }
   }
   
-  // Ensure button color is different from background
   if (primary === bg) {
-    console.log("⚠️ Primary matches background, adjusting...");
-    // If primary matches background, use accent or a contrasting color
     if (fingerprint?.palette.accent && fingerprint.palette.accent.length > 0) {
       primary = fingerprint.palette.accent[0];
     } else {
-      // Use a contrasting color based on background brightness
       const bgLuminance = getLuminance(bg);
       primary = bgLuminance > 0.5 ? "#000000" : "#FFFFFF";
     }
   }
   
-  console.log("🎨 Final button color:", primary);
   const accent = fingerprint?.palette.accent[0] || null;
 
   const radiusClass =
@@ -606,25 +771,16 @@ function SampleUI({ title, fingerprint, styleTextUsed = "" }: SampleProps) {
       ? "rounded-full"
       : "rounded-lg";
 
-  const paddingClass =
-    fingerprint?.spacing === "tight"
-      ? "p-3"
-      : fingerprint?.spacing === "airy"
-      ? "p-6"
-      : "p-4";
-
   return (
     <div className="border border-zinc-800 rounded-xl p-4 space-y-4 bg-zinc-950">
       <h2 className="text-sm font-medium">{title}</h2>
       
-      {/* Card and Material Demo side by side */}
-      <div className="flex justify-center gap-6 flex-wrap">
-        {/* Original Card */}
+      <div className="flex justify-center gap-4 flex-wrap">
         <div
           className="rounded-lg bg-white"
           style={{ 
-            width: "346px",
-            minWidth: "346px",
+            width: "100%",
+            maxWidth: "280px",
             padding: "0",
             backgroundColor: fingerprint ? bg : "#FFFFFF",
             borderRadius: fingerprint?.radius === "sharp" ? "0" :
@@ -634,88 +790,84 @@ function SampleUI({ title, fingerprint, styleTextUsed = "" }: SampleProps) {
             boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)"
           }}
         >
-        {/* Icon and Text */}
-        <div className="flex items-start" style={{ padding: "24px" }}>
-          {fingerprint && accent && accent.length > 0 ? (
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-              style={{ backgroundColor: accent[0] }}
-            >
-              {(() => {
-                const IconComponent = getIconComponent(fingerprint.iconography.library);
-                const iconColor = getContrastColor(accent[0]);
-                const strokeWidth = fingerprint.iconography.weight === "thin" ? 1.5 : 
-                                   fingerprint.iconography.weight === "bold" ? 3 : 2;
-                return (
-                  <IconComponent 
-                    size={20} 
-                    color={iconColor}
-                    strokeWidth={strokeWidth}
-                    style={{ 
-                      strokeWidth: fingerprint.iconography.style === "filled" ? 0 : strokeWidth,
-                      fill: fingerprint.iconography.style === "filled" ? iconColor : "none"
-                    }}
-                  />
-                );
-              })()}
-            </div>
-          ) : (
-            <div 
-              className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0"
-            >
-              {(() => {
-                const IconComponent = fingerprint ? getIconComponent(fingerprint.iconography.library) : HeroCheck;
-                const iconColor = getContrastColor("#10B981");
-                const strokeWidth = fingerprint?.iconography.weight === "thin" ? 1.5 : 
-                                   fingerprint?.iconography.weight === "bold" ? 3 : 2;
-                return (
-                  <IconComponent 
-                    size={20} 
-                    color={iconColor}
-                    strokeWidth={strokeWidth}
-                    style={{ 
-                      strokeWidth: fingerprint?.iconography.style === "filled" ? 0 : strokeWidth,
-                      fill: fingerprint?.iconography.style === "filled" ? iconColor : "none"
-                    }}
-                  />
-                );
-              })()}
-            </div>
-          )}
-          
-          <div className="flex-1 min-w-0" style={{ paddingLeft: "12px" }}>
-            {/* Headline - 22px bold */}
-            <h1
-              className="font-bold mb-2"
-              style={{
-                fontSize: "22px",
-                color: fingerprint ? getContrastColor(bg) : "#000000",
-                fontFamily: fingerprint?.typography.fontFamily 
-                  ? `"${fingerprint.typography.fontFamily}", ${fingerprint.typography.category === "serif" ? "serif" : fingerprint.typography.category === "mono" ? "monospace" : "sans-serif"}`
-                  : undefined
-              }}
-            >
-              This is a headline title
-            </h1>
+          <div className="flex items-start" style={{ padding: "20px" }}>
+            {fingerprint && accent && accent.length > 0 ? (
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                style={{ backgroundColor: accent[0] }}
+              >
+                {(() => {
+                  const IconComponent = getIconComponent(fingerprint.iconography.library);
+                  const iconColor = getContrastColor(accent[0]);
+                  const strokeWidth = fingerprint.iconography.weight === "thin" ? 1.5 : 
+                                     fingerprint.iconography.weight === "bold" ? 3 : 2;
+                  return (
+                    <IconComponent 
+                      size={20} 
+                      color={iconColor}
+                      strokeWidth={strokeWidth}
+                      style={{ 
+                        strokeWidth: fingerprint.iconography.style === "filled" ? 0 : strokeWidth,
+                        fill: fingerprint.iconography.style === "filled" ? iconColor : "none"
+                      }}
+                    />
+                  );
+                })()}
+              </div>
+            ) : (
+              <div 
+                className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0"
+              >
+                {(() => {
+                  const IconComponent = fingerprint ? getIconComponent(fingerprint.iconography.library) : HeroCheck;
+                  const iconColor = getContrastColor("#10B981");
+                  const strokeWidth = fingerprint?.iconography.weight === "thin" ? 1.5 : 
+                                     fingerprint?.iconography.weight === "bold" ? 3 : 2;
+                  return (
+                    <IconComponent 
+                      size={20} 
+                      color={iconColor}
+                      strokeWidth={strokeWidth}
+                      style={{ 
+                        strokeWidth: fingerprint?.iconography.style === "filled" ? 0 : strokeWidth,
+                        fill: fingerprint?.iconography.style === "filled" ? iconColor : "none"
+                      }}
+                    />
+                  );
+                })()}
+              </div>
+            )}
             
-            {/* Body text - 14px */}
-            <p
-              className="leading-relaxed"
-              style={{
-                fontSize: "14px",
-                color: fingerprint ? getContrastColor(bg) : "#000000",
-                fontFamily: fingerprint?.typography.fontFamily 
-                  ? `"${fingerprint.typography.fontFamily}", ${fingerprint.typography.category === "serif" ? "serif" : fingerprint.typography.category === "mono" ? "monospace" : "sans-serif"}`
-                  : undefined
-              }}
-            >
-              This is body text
-            </p>
+            <div className="flex-1 min-w-0" style={{ paddingLeft: "12px" }}>
+              <h1
+                className="font-bold mb-2"
+                style={{
+                  fontSize: "20px",
+                  color: fingerprint ? getContrastColor(bg) : "#000000",
+                  fontFamily: fingerprint?.typography.fontFamily 
+                    ? `"${fingerprint.typography.fontFamily}", ${fingerprint.typography.category === "serif" ? "serif" : fingerprint.typography.category === "mono" ? "monospace" : "sans-serif"}`
+                    : undefined
+                }}
+              >
+                This is a headline title
+              </h1>
+              
+              <p
+                className="leading-relaxed"
+                style={{
+                  fontSize: "14px",
+                  color: fingerprint ? getContrastColor(bg) : "#000000",
+                  fontFamily: fingerprint?.typography.fontFamily 
+                    ? `"${fingerprint.typography.fontFamily}", ${fingerprint.typography.category === "serif" ? "serif" : fingerprint.typography.category === "mono" ? "monospace" : "sans-serif"}`
+                    : undefined
+                }}
+              >
+                This is body text
+              </p>
+            </div>
           </div>
         </div>
-        </div>
         
-        {/* Material Control Tile - only show when style text was used in current extraction and matches */}
         {fingerprint && fingerprint.materialStyle && 
          fingerprint.materialStyle.toLowerCase() !== "flat" &&
          styleTextUsed.length > 0 && 
@@ -728,12 +880,11 @@ function SampleUI({ title, fingerprint, styleTextUsed = "" }: SampleProps) {
         )}
       </div>
       
-      {/* Primary button preview - separate from card */}
       {fingerprint && (
-        <div className="mt-6" style={{ textAlign: "center" }}>
+        <div className="mt-4" style={{ textAlign: "center" }}>
           <div
             style={{
-              padding: "8px 16px",
+              padding: "10px 20px",
               fontSize: "14px",
               fontWeight: 500,
               backgroundColor: primary,
