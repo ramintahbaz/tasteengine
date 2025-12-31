@@ -44,6 +44,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [styleText, setStyleText] = useState<string>("");
   const [styleTextUsedInExtraction, setStyleTextUsedInExtraction] = useState<string>("");
+  const [isDragging, setIsDragging] = useState(false);
   
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -188,6 +189,44 @@ export default function Home() {
     galleryInputRef.current?.click();
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(
+      (file) => file.type.startsWith("image/") || 
+                file.name.toLowerCase().endsWith('.heic') || 
+                file.name.toLowerCase().endsWith('.heif')
+    );
+    
+    if (droppedFiles.length > 0) {
+      // Create a synthetic event to reuse handleFileChange logic
+      const dataTransfer = new DataTransfer();
+      droppedFiles.forEach(file => dataTransfer.items.add(file));
+      
+      const syntheticEvent = {
+        target: {
+          files: dataTransfer.files
+        }
+      } as ChangeEvent<HTMLInputElement>;
+      
+      await handleFileChange(syntheticEvent);
+    }
+  };
+
   const refineFingerprintFromAnswers = (
     currentFingerprint: TasteFingerprint,
     answers: Record<number, string>,
@@ -330,12 +369,23 @@ export default function Home() {
           </header>
 
           {/* Upload pad */}
-          <div className="border-2 border-dashed border-zinc-800 rounded-2xl p-12 bg-zinc-900/50 flex flex-col items-center justify-center min-h-[300px]">
+          <div 
+            className={`border-2 border-dashed rounded-2xl p-12 bg-zinc-900/50 flex flex-col items-center justify-center min-h-[300px] transition-colors ${
+              isDragging 
+                ? "border-zinc-400 bg-zinc-900/80" 
+                : "border-zinc-800 hover:border-zinc-700"
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <div className="w-20 h-20 rounded-full bg-zinc-800 flex items-center justify-center mb-6">
               <FiImage className="w-10 h-10 text-zinc-400" />
             </div>
             <p className="text-sm text-zinc-400 mb-8 text-center">
-              Choose how you'd like to add images
+              {isDragging 
+                ? "Drop images here" 
+                : "Drag and drop images here, or choose an option below"}
             </p>
 
             {/* Camera and Gallery buttons */}
