@@ -361,7 +361,7 @@ export default function Home() {
         <div className="w-full max-w-md space-y-8">
           <header className="text-center space-y-3">
             <h1 className="text-3xl font-semibold">
-              Taste Engine
+              Co-Creator
             </h1>
             <p className="text-sm text-zinc-400">
               Upload images to extract your design taste fingerprint
@@ -437,7 +437,7 @@ export default function Home() {
       <main className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col py-6 px-4">
         <div className="w-full max-w-md mx-auto space-y-6">
           <header className="flex items-center justify-between">
-            <h1 className="text-2xl font-semibold">Taste Engine</h1>
+            <h1 className="text-2xl font-semibold">Co-Creator</h1>
             <button
               onClick={handleReset}
               className="text-sm text-zinc-400 hover:text-zinc-200"
