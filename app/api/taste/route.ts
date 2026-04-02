@@ -43,11 +43,6 @@ export async function POST(request: NextRequest) {
 
     const images = formData.getAll("images") as File[];
     const styleText = formData.get("styleText") as string | null;
-    
-    if (styleText) {
-      console.log("📥 Received styleText from frontend:", styleText);
-    }
-
 
 
     if (!images || images.length === 0) {
@@ -716,34 +711,27 @@ function getIconographyFromColorMood(
 }
 
 function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
-  console.log("🔍 Mapping raw analysis:", JSON.stringify(raw, null, 2));
-  
   // COLORS: Use direct values from model (simple & smart)
   let primary: string[];
   if (raw.contentType === "ui" && raw.uiDetails?.primaryButtonColor) {
     // If it's a UI, use the exact primary button color
     primary = [raw.uiDetails.primaryButtonColor];
-    console.log("✅ Using UI primary button color:", primary[0]);
   } else if (raw.dominantColor) {
     // Otherwise use the dominant color
     primary = [raw.dominantColor];
-    console.log("✅ Using dominant color:", primary[0]);
   } else {
     // Fallback
     primary = raw.lightDarkBias === "dark" ? ["#000000"] : ["#FFFFFF"];
-    console.log("⚠️ Using fallback primary color:", primary[0]);
   }
   
   // Reject blue fallback
   if (primary[0] === "#2563EB") {
     primary = raw.lightDarkBias === "dark" ? ["#000000"] : ["#FFFFFF"];
-    console.log("🚫 Rejected blue fallback, using:", primary[0]);
   }
   
   let accent: string[];
   if (raw.secondaryColor) {
     accent = [raw.secondaryColor];
-    console.log("✅ Using secondary color as accent:", accent[0]);
   } else {
     accent = [];
   }
@@ -751,13 +739,10 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
   let neutral: string[];
   if (raw.contentType === "ui" && raw.uiDetails?.cardBackgroundColor) {
     neutral = [raw.uiDetails.cardBackgroundColor];
-    console.log("✅ Using UI card background color:", neutral[0]);
   } else if (raw.backgroundColor) {
     neutral = [raw.backgroundColor];
-    console.log("✅ Using background color:", neutral[0]);
   } else {
     neutral = raw.lightDarkBias === "dark" ? ["#111827"] : ["#F5F5F5"];
-    console.log("⚠️ Using fallback neutral:", neutral[0]);
   }
   
   // RADIUS: Use UI details if available, otherwise map from score
@@ -768,14 +753,12 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
     else if (px <= 6) radius = "subtle";
     else if (px <= 12) radius = "rounded";
     else radius = "pill";
-    console.log("✅ Using UI borderRadius:", px, "→", radius);
   } else {
     // Map from edgeRoundnessScore
     if (raw.edgeRoundnessScore <= 0.2) radius = "sharp";
     else if (raw.edgeRoundnessScore <= 0.5) radius = "subtle";
     else if (raw.edgeRoundnessScore <= 0.8) radius = "rounded";
     else radius = "pill";
-    console.log("✅ Using edgeRoundnessScore:", raw.edgeRoundnessScore, "→", radius);
   }
   
   // SPACING: Map from visualDensity
@@ -805,25 +788,20 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
       if (matched) {
         fontFamily = matched.fontFamily;
         fontUrl = matched.fontUrl;
-        console.log("✅ Matched font:", raw.typographyDetails.fontFamily, "→", fontFamily);
       } else {
         // Fallback to category-based font
         const fontInfo = getFontFromCategory(category);
         fontFamily = fontInfo.fontFamily;
         fontUrl = fontInfo.fontUrl;
-        console.log("⚠️ Could not match font, using category-based:", fontFamily);
       }
     } else {
       // No font family identified, use category-based
       const fontInfo = getFontFromCategory(category);
       fontFamily = fontInfo.fontFamily;
       fontUrl = fontInfo.fontUrl;
-      console.log("⚠️ No font family identified, using category-based:", fontFamily);
     }
   } else {
     // NO TYPOGRAPHY EXISTS: Infer typography from color-based mood
-    console.log("📝 No typography found, inferring from color-based mood:", raw.colorBasedMood);
-    
     colorBasedTypography = getTypographyFromColorMood(
       raw.colorBasedMood,
       raw.dominantColor
@@ -846,14 +824,6 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
       scale = "medium";
       lineHeight = "normal";
     }
-    
-    console.log("✅ Inferred typography from colors:", {
-      colorBasedMood: raw.colorBasedMood,
-      selectedFont: fontFamily,
-      category,
-      weight,
-      moodCategory: colorBasedTypography.moodCategory
-    });
   }
 
   // Determine moodCategory for return value
@@ -877,11 +847,8 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
     // Default to heroicons for extracted iconography, but could be enhanced to detect library
     iconLibrary = "heroicons";
     iconMoodCategory = "extracted";
-    console.log("✅ Using extracted iconography:", iconStyle, iconWeight);
   } else {
     // NO ICONOGRAPHY EXISTS: Infer iconography from color-based mood
-    console.log("📝 No iconography found, inferring from color-based mood:", raw.colorBasedMood);
-    
     const colorBasedIconography = getIconographyFromColorMood(
       raw.colorBasedMood,
       raw.dominantColor
@@ -891,14 +858,6 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
     iconWeight = colorBasedIconography.weight;
     iconLibrary = colorBasedIconography.library;
     iconMoodCategory = colorBasedIconography.moodCategory;
-    
-    console.log("✅ Inferred iconography from colors:", {
-      colorBasedMood: raw.colorBasedMood,
-      selectedStyle: iconStyle,
-      weight: iconWeight,
-      library: iconLibrary,
-      moodCategory: iconMoodCategory
-    });
   }
 
   // MATERIAL: Map from raw material, with defaults and clamping
@@ -933,12 +892,6 @@ function mapToTasteFingerprint(raw: RawTasteAnalysis): TasteFingerprint {
   const materialIntensity = raw.materialIntensity !== undefined 
     ? clamp(raw.materialIntensity) 
     : 0.7;
-  
-  console.log("🎨 Material style extracted:", { 
-    raw: raw.materialStyle, 
-    final: materialStyle, 
-    intensity: materialIntensity 
-  });
 
   return {
     palette: {

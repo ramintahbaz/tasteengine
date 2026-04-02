@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TasteEngine
 
-## Getting Started
+Drop screenshots or moodboard images. Get back a structured design fingerprint — colors, typography, spacing, radius, material style — applied live to a sample UI.
 
-First, run the development server:
+Built with Next.js and GPT-4o vision.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+[demo video or screenshot]
+
+## what it does
+
+- accepts one or more images (UI screenshots, product photos, moodboards, anything)
+- sends them to GPT-4o with a structured extraction prompt
+- returns a `TasteFingerprint` object: palette, typography, iconography, spacing, radius, and material properties
+- renders a live card and button preview using the extracted fingerprint
+- optional style text modifier (e.g. "glass-like", "matte", "soft shadows") to influence material extraction
+
+## taste fingerprint shape
+
+```ts
+type TasteFingerprint = {
+  palette: {
+    primary: string[]
+    accent: string[]
+    neutral: string[]
+    contrast: "low" | "medium" | "high"
+  }
+  typography: {
+    category: "serif" | "sans-serif" | "mono" | "mixed"
+    weight: "light" | "regular" | "medium" | "bold"
+    scale: "small" | "medium" | "large"
+    lineHeight: "tight" | "normal" | "airy"
+    fontFamily?: string
+    fontUrl?: string
+  }
+  iconography: {
+    style: "minimal" | "rounded" | "sharp" | "filled" | "outlined" | "hand-drawn" | "geometric"
+    weight: "thin" | "regular" | "bold"
+    library: "feather" | "material" | "fa" | "heroicons"
+  }
+  radius: "sharp" | "subtle" | "rounded" | "pill"
+  spacing: "tight" | "medium" | "airy"
+  material: {
+    translucency: number  // 0–1
+    blur: number
+    gloss: number
+    texture: number
+    softness: number
+    elevation: number
+    contrast: number
+    edgeHighlight: number
+  }
+  materialStyle: "flat" | "glass" | "neuo" | "skeuo" | "solid" | string
+  materialIntensity: number  // 0–1
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## running locally
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+git clone https://github.com/ramintahbaz/tasteengine
+cd tasteengine
+npm install
+cp .env.example .env.local
+# add your OpenAI API key to .env.local
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## env vars
 
-## Learn More
+```
+OPENAI_API_KEY=your_key_here
+```
 
-To learn more about Next.js, take a look at the following resources:
+## stack
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Next.js 15 (App Router)
+- TypeScript
+- Tailwind CSS
+- GPT-4o vision via OpenAI API
+- react-icons
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## license
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT © 2025 Ramin Tahbaz
